@@ -12,12 +12,16 @@
 #include "winfile.h"
 #include "lfn.h"
 #include "wfcopy.h"
+#include <shlobj.h>
 
 #define LABEL_NTFS_MAX 32
 #define LABEL_FAT_MAX  11
+#define CCH_VERSION    40
+#define CCH_DRIVE       3
+#define CCH_DLG_TITLE  16
 
-VOID FormatDrive( IN PVOID ThreadParameter );
-VOID CopyDiskette( IN PVOID ThreadParameter );
+DWORD WINAPI FormatDrive( IN PVOID ThreadParameter );
+DWORD WINAPI CopyDiskette( IN PVOID ThreadParameter );
 VOID SwitchToSafeDrive(VOID);
 VOID MDIClientSizeChange(HWND hwndActive, INT iFlags);
 
@@ -25,6 +29,8 @@ VOID CopyDiskEnd(VOID);
 VOID FormatEnd(VOID);
 VOID CancelDlgQuit(VOID);
 VOID LockFormatDisk(INT iDrive1, INT iDrive2, DWORD dwMessage, DWORD dwCommand, BOOL bLock);
+
+BOOL GetProductVersion(WORD * pwMajor, WORD * pwMinor, WORD * pwBuild, WORD * pwRevision);
 
 DWORD ulTotalSpace, ulSpaceAvail;
 
@@ -41,6 +47,7 @@ typedef enum {
 /*--------------------------------------------------------------------------*/
 
 INT_PTR
+CALLBACK
 ChooseDriveDlgProc(register HWND hDlg, UINT wMsg, WPARAM wParam, LPARAM lParam)
 {
    TCHAR szDrive[5];
@@ -112,7 +119,7 @@ ChooseDriveDlgProc(register HWND hDlg, UINT wMsg, WPARAM wParam, LPARAM lParam)
 
                EndDialog(hDlg, TRUE);
 
-               CreateDialog(hAppInstance, (LPTSTR) MAKEINTRESOURCE(CANCELDLG), hwndFrame, (DLGPROC) CancelDlgProc);
+               CreateDialog(hAppInstance, (LPTSTR) MAKEINTRESOURCE(CANCELDLG), hwndFrame, CancelDlgProc);
             } else {
                EndDialog(hDlg, TRUE);
             }
@@ -149,6 +156,7 @@ DoHelp:
 /*--------------------------------------------------------------------------*/
 
 INT_PTR
+CALLBACK
 DiskLabelDlgProc(register HWND hDlg, UINT wMsg, WPARAM wParam, LPARAM lParam)
 {
    TCHAR szNewVol[MAXPATHLEN];
@@ -290,7 +298,7 @@ FormatDiskette(HWND hwnd, BOOL bModal)
 
     CancelInfo.bModal = bModal;
 
-    res = DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(FORMATDLG), hwnd, (DLGPROC) FormatDlgProc);
+    res = DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(FORMATDLG), hwnd, FormatDlgProc);
 
     dwContext = dwSave;
 }
@@ -504,6 +512,7 @@ FillDriveCapacity(HWND hDlg, INT nDrive, FMIFS_MEDIA_TYPE fmSelect, BOOL fDoPopu
 /*--------------------------------------------------------------------------*/
 
 INT_PTR
+CALLBACK
 FormatDlgProc(register HWND hDlg, UINT wMsg, WPARAM wParam, LPARAM lParam)
 {
    TCHAR szBuf[128];
@@ -700,9 +709,9 @@ FormatDlgProc(register HWND hDlg, UINT wMsg, WPARAM wParam, LPARAM lParam)
          // use a modal box.
 
          if (CancelInfo.bModal) {
-            DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(CANCELDLG), hwndFrame, (DLGPROC) CancelDlgProc);
+            DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(CANCELDLG), hwndFrame, CancelDlgProc);
          } else {
-            CreateDialog(hAppInstance, (LPTSTR) MAKEINTRESOURCE(CANCELDLG), hwndFrame, (DLGPROC) CancelDlgProc);
+            CreateDialog(hAppInstance, (LPTSTR) MAKEINTRESOURCE(CANCELDLG), hwndFrame, CancelDlgProc);
          }
 
          break;
@@ -724,7 +733,136 @@ DoHelp:
   return TRUE;
 }
 
-VOID
+/*----------------------------------------------------------------------------*/
+/*                                                                            */
+/*  FormatSelectDlgProc() -  DialogProc callback function for FORMATSELECTDLG */
+/*                                                                            */
+/*----------------------------------------------------------------------------*/
+
+INT_PTR
+CALLBACK
+FormatSelectDlgProc(register HWND hDlg, UINT wMsg, WPARAM wParam, LPARAM lParam)
+{
+    HWND  hwndSelectDrive;
+    INT   driveIndex;
+    INT   comboxIndex;
+    DRIVE drive;
+    DWORD dwFormatResult;
+    TCHAR szDrive[CCH_DRIVE] = { 0 };
+    TCHAR szDlgTitle[CCH_DLG_TITLE] = { 0 };
+
+    switch (wMsg)
+    {
+    case WM_INITDIALOG:
+        {
+            // Build the list of drives that can be selected for formatting.
+            // Do not include remote drives or CD/DVD drives.
+            szDrive[1] = ':';
+            hwndSelectDrive = GetDlgItem(hDlg, IDD_SELECTDRIVE);
+            if (hwndSelectDrive)
+            {
+                for (driveIndex = 0; driveIndex < cDrives; driveIndex++)
+                {
+                    drive = rgiDrive[driveIndex];
+                    if (!IsRemoteDrive(drive) && !IsCDRomDrive(drive))
+                    {
+                        // Set the drive letter as the string and the drive index as the data.
+                        DRIVESET(szDrive, drive);
+                        comboxIndex = SendMessage(hwndSelectDrive, CB_ADDSTRING, 0, (LPARAM)szDrive);
+                        SendMessage(hwndSelectDrive, CB_SETITEMDATA, comboxIndex, (LPARAM)drive);
+                    }
+                }
+
+                SendMessage(hwndSelectDrive, CB_SETCURSEL, 0, 0);
+            }
+
+            return TRUE;
+        }
+    case WM_COMMAND:
+        switch (GET_WM_COMMAND_ID(wParam, lParam))
+        {
+        case IDOK:
+            {
+                // Hide this dialog window while the SHFormatDrive dialog is displayed.
+                // SHFormatDrive needs a parent window, and this dialog will serve as
+                // that parent, even if it is hidden.
+                ShowWindow(hDlg, SW_HIDE);
+
+                // Retrieve the selected drive index and call SHFormatDrive with it.
+                comboxIndex = (INT)SendDlgItemMessage(hDlg, IDD_SELECTDRIVE, CB_GETCURSEL, 0, 0);
+                drive = (DRIVE)SendDlgItemMessage(hDlg, IDD_SELECTDRIVE, CB_GETITEMDATA, comboxIndex, 0);
+                dwFormatResult = SHFormatDrive(hDlg, drive, SHFMT_ID_DEFAULT, 0);
+
+                // If the format results in an error, show FORMATSELECTDLG again so
+                // the user can select a different drive if needed, or cancel.
+                // Otherwise, if the format was successful, just close FORMATSELECTDLG.
+                if (dwFormatResult == SHFMT_ERROR || dwFormatResult == SHFMT_CANCEL || dwFormatResult == SHFMT_NOFORMAT)
+                {
+                    // SHFormatDrive sometimes sets the parent window title when it encounters an error.
+                    // We don't want this; set the title back before we show the dialog.
+                    LoadString(hAppInstance, IDS_FORMATSELECTDLGTITLE, szDlgTitle, CCH_DLG_TITLE);
+                    SetWindowText(hDlg, szDlgTitle);
+                    ShowWindow(hDlg, SW_SHOW);
+                }
+                else
+                {
+                    DestroyWindow(hDlg);
+                    hwndFormatSelect = NULL;
+                }
+
+                return TRUE;
+            }
+        case IDCANCEL:
+            DestroyWindow(hDlg);
+            hwndFormatSelect = NULL;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/*--------------------------------------------------------------------------*/
+/*                                                                          */
+/*  AboutDlgProc() -  DialogProc callback function for ABOUTDLG             */
+/*                                                                          */
+/*--------------------------------------------------------------------------*/
+
+INT_PTR
+CALLBACK
+AboutDlgProc(register HWND hDlg, UINT wMsg, WPARAM wParam, LPARAM lParam)
+{
+    WORD wMajorVersion   = 0;
+    WORD wMinorVersion   = 0;
+    WORD wBuildNumber    = 0;
+    WORD wRevisionNumber = 0;
+    TCHAR szVersion[CCH_VERSION] = { 0 };
+
+    switch (wMsg)
+    {
+    case WM_INITDIALOG:
+        if (GetProductVersion(&wMajorVersion, &wMinorVersion, &wBuildNumber, &wRevisionNumber))
+        {
+            if (SUCCEEDED(StringCchPrintf(szVersion, CCH_VERSION, TEXT("Version %d.%d.%d.%d"),
+                (int)wMajorVersion, (int)wMinorVersion, (int)wBuildNumber, (int)wRevisionNumber)))
+            {
+                SetDlgItemText(hDlg, IDD_VERTEXT, szVersion);
+            }
+        }
+        return TRUE;
+    case WM_COMMAND:
+        switch (GET_WM_COMMAND_ID(wParam, lParam))
+        {
+        case IDOK:
+        case IDCANCEL:
+            EndDialog(hDlg, IDOK);
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+DWORD
+WINAPI
 FormatDrive( IN PVOID ThreadParameter )
 {
    WCHAR wszDrive[3];
@@ -743,14 +881,17 @@ FormatDrive( IN PVOID ThreadParameter )
          CancelInfo.Info.Format.fmMediaType,
          wszFileSystem,
          wszLabel,
-         (BOOLEAN)CancelInfo.Info.Format.fQuick,
+         (BOOLEAN)(CancelInfo.Info.Format.fQuick ? TRUE : FALSE),
          (FMIFS_CALLBACK)&Callback_Function);
    } while (CancelInfo.Info.Format.fFlags & FF_RETRY);
 
    CancelDlgQuit();
+
+   return 0;
 }
 
-VOID
+DWORD
+WINAPI
 CopyDiskette( IN PVOID ThreadParameter )
 {
   BOOL fVerify = FALSE;
@@ -772,6 +913,8 @@ CopyDiskette( IN PVOID ThreadParameter )
                   (FMIFS_CALLBACK)&Callback_Function);
 
    CancelDlgQuit();
+
+   return 0;
 }
 
 
@@ -950,7 +1093,8 @@ Callback_Function(FMIFS_PACKET_TYPE   PacketType,
  *
  */
 
-BOOL
+INT_PTR
+CALLBACK
 CancelDlgProc(HWND hDlg,
    UINT message,
    WPARAM wParam,
@@ -1017,7 +1161,7 @@ CancelDlgProc(HWND hDlg,
             case CANCEL_FORMAT:
                CancelInfo.hThread = CreateThread( NULL,      // Security
                   0L,                                        // Stack Size
-                  (LPTHREAD_START_ROUTINE)FormatDrive,
+                  FormatDrive,
                   NULL,
                   0L,
                   &Ignore );
@@ -1025,7 +1169,7 @@ CancelDlgProc(HWND hDlg,
             case CANCEL_COPY:
               CancelInfo.hThread = CreateThread( NULL,      // Security
                   0L,                                        // Stack Size
-                  (LPTHREAD_START_ROUTINE)CopyDiskette,
+                  CopyDiskette,
                   NULL,
                   0L,
                   &Ignore );
@@ -1161,6 +1305,7 @@ CancelDlgProc(HWND hDlg,
 /////////////////////////////////////////////////////////////////////
 
 INT_PTR
+CALLBACK
 ProgressDlgProc(register HWND hDlg, UINT wMsg, WPARAM wParam, LPARAM lParam)
 {
    static PCOPYINFO pCopyInfo;
@@ -1388,6 +1533,7 @@ UpdateConnections(BOOL bUpdateDriveList)
 }
 
 INT_PTR
+CALLBACK
 DrivesDlgProc(HWND hDlg, UINT wMsg, WPARAM wParam, LPARAM lParam)
 {
    DRIVEIND driveInd;
@@ -1402,7 +1548,6 @@ DrivesDlgProc(HWND hDlg, UINT wMsg, WPARAM wParam, LPARAM lParam)
          INT nCurDrive;
          DRIVEIND nIndex;
          LPTSTR lpszVolShare;
-         TCHAR szDrive[] = SZ_ACOLON;
 
          nCurDrive = GetSelectedDrive();
          nIndex = 0;
@@ -1633,22 +1778,19 @@ LockFormatDisk(DRIVE drive1, DRIVE drive2,
    DWORD dwMessage, DWORD dwCommand, BOOL bLock)
 {
    HMENU hMenu;
-   static DWORD adwCommands[] = {
-      IDM_DISKCOPY,
-      IDM_FORMAT,
-      0
-   };
 
-   INT i=0;
-
-   // Gray out disk:{format,copy}
+   // Gray out menu item dwCommand
    hMenu = GetMenu(hwndFrame);
 
-   while (adwCommands[i]) {
-      if (dwCommand != adwCommands[i])
-         EnableMenuItem( hMenu, dwCommand ,
-         bLock ? MF_BYCOMMAND | MF_GRAYED : MF_BYCOMMAND | MF_ENABLED );
-      i++;
+   // Special case for IDM_FORMAT, as it no longer invokes FormatDiskette,
+   // it can be safely left enabled even when copying diskettes.
+   // This change is made here rather than removing the calls to
+   // LockFormatDisk with IDM_FORMAT since LockFormatDisk also
+   // changes the state of aDriveInfo.
+   if (dwCommand != IDM_FORMAT)
+   {
+       EnableMenuItem(hMenu, dwCommand,
+           bLock ? MF_BYCOMMAND | MF_GRAYED : MF_BYCOMMAND | MF_ENABLED);
    }
 
    //
@@ -1672,4 +1814,63 @@ DestroyCancelWindow()
    }
    CancelInfo.hCancelDlg = NULL;
 }
-
+
+//
+// GetProductVersion
+// Gets the product version values for the current module
+//
+// Parameters:
+//   pwMajor    - [OUT] A pointer to the major version number
+//   pwMinor    - [OUT] A pointer to the minor version number
+//   pwBuild    - [OUT] A pointer to the build number
+//   pwRevision - [OUT] A pointer to the revision number
+//   
+// Returns TRUE if successful
+//
+BOOL GetProductVersion(WORD * pwMajor, WORD * pwMinor, WORD * pwBuild, WORD * pwRevision)
+{
+    BOOL               success = FALSE;
+    TCHAR              szCurrentModulePath[MAX_PATH];
+    DWORD              cchPath;
+    DWORD              cbVerInfo;
+    LPVOID             pFileVerInfo;
+    UINT               uLen;
+    VS_FIXEDFILEINFO * pFixedFileInfo;
+
+    cchPath = GetModuleFileName(NULL, szCurrentModulePath, MAX_PATH);
+
+    if (cchPath && GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+    {
+        cbVerInfo = GetFileVersionInfoSize(szCurrentModulePath, NULL);
+
+        if (cbVerInfo)
+        {
+            pFileVerInfo = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, cbVerInfo);
+
+            if (pFileVerInfo)
+            {
+                if (GetFileVersionInfo(szCurrentModulePath, 0, cbVerInfo, pFileVerInfo))
+                {
+                    // Get the pointer to the VS_FIXEDFILEINFO structure
+                    if (VerQueryValue(pFileVerInfo, TEXT("\\"), (LPVOID *)&pFixedFileInfo, &uLen))
+                    {
+                        if (pFixedFileInfo && uLen)
+                        {
+                            *pwMajor    = HIWORD(pFixedFileInfo->dwProductVersionMS);
+                            *pwMinor    = LOWORD(pFixedFileInfo->dwProductVersionMS);
+                            *pwBuild    = HIWORD(pFixedFileInfo->dwProductVersionLS);
+                            *pwRevision = LOWORD(pFixedFileInfo->dwProductVersionLS);
+
+                            success = TRUE;
+                        }
+                    }
+                }
+
+                HeapFree(GetProcessHeap(), 0, pFileVerInfo);
+            }
+        }
+
+    }
+
+    return success;
+}

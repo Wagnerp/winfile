@@ -16,6 +16,9 @@
 #include "wnetcaps.h"         // WNetGetCaps()
 
 #include <ole2.h>
+#include <shlobj.h>
+
+#include "dbg.h"
 
 typedef VOID (APIENTRY *FNPENAPP)(WORD, BOOL);
 
@@ -82,6 +85,9 @@ BiasMenu(HMENU hMenu, UINT Bias)
          // replace the item that was there with a new
          // one with the id adjusted
 
+         // makes sure id range is 0=99 first; really should assert or throw an exception
+         id %= 100;
+
          GetMenuString(hMenu, pos, szMenuString, COUNTOF(szMenuString), MF_BYPOSITION);
          DeleteMenu(hMenu, pos, MF_BYPOSITION);
          InsertMenu(hMenu, pos, MF_BYPOSITION | MF_STRING, id + Bias, szMenuString);
@@ -99,19 +105,15 @@ InitExtensions()
    HANDLE hMod;
    FM_EXT_PROC fp;
    HMENU hMenu;
-   INT iMax;
+   INT iMenuBase;
    HMENU hMenuFrame;
-   HWND  hwndActive;
    INT iMenuOffset=0;
    BOOL bUnicode;
 
    hMenuFrame = GetMenu(hwndFrame);
 
-   hwndActive = (HWND)SendMessage(hwndMDIClient, WM_MDIGETACTIVE, 0, 0L);
-   if (hwndActive && GetWindowLongPtr(hwndActive, GWL_STYLE) & WS_MAXIMIZE)
-      iMax = 1;
-   else
-      iMax = 0;
+   ASSERT(!bSecMenuDeleted);
+   iMenuBase = MapIDMToMenuPos(IDM_EXTENSIONS);
 
    GetPrivateProfileString(szAddons, NULL, szNULL, szBuf, COUNTOF(szBuf), szTheINIFile);
 
@@ -141,11 +143,11 @@ InitExtensions()
             // don't know about each other and may clash IDM_xx if
             // we don't.
 
-            // Our system is as follow:  IDMs 1000 - 6999 are reserved
+            // Our system is as follow:  IDMs 100 - 699 are reserved
             // for us (menus 0 - 5 inclusive).  Thus, IDMs
-            // 7000 - 1199 is reserved for extensions.
+            // 700 - 1699 is reserved for extensions.
             // This is why we added 1 in the above line to compute
-            // bias: IDMs 0000-0999 are not used for menu 0.
+            // NOTE: IDMs 0000-0099 are not used for menu 0.
 
             if (bUnicode)
                lsW.wMenuDelta = bias;
@@ -166,17 +168,23 @@ InitExtensions()
                extensions[iNumExtensions].hMenu = hMenu;
                extensions[iNumExtensions].bUnicode = bUnicode;
 
+               // these are set when FMEVENT_TOOLBARLOAD is called
+               extensions[iNumExtensions].hbmButtons = NULL;
+               extensions[iNumExtensions].idBitmap = 0;
+               extensions[iNumExtensions].iStartBmp = 0;
+               extensions[iNumExtensions].bRestored = FALSE;
+
                if (hMenu) {
                   BiasMenu(hMenu, bias);
 
                   if (bUnicode) {
                      InsertMenuW(hMenuFrame,
-                        IDM_EXTENSIONS + iMenuOffset + iMax,
+                        iMenuBase + iMenuOffset,
                         MF_BYPOSITION | MF_POPUP,
                         (UINT_PTR) hMenu, lsW.szMenuName);
                   } else {
                      InsertMenuA(hMenuFrame,
-                        IDM_EXTENSIONS + iMenuOffset + iMax,
+                        iMenuBase + iMenuOffset,
                         MF_BYPOSITION | MF_POPUP,
                         (UINT_PTR) hMenu, lsA.szMenuName);
                   }
@@ -213,9 +221,12 @@ GetSettings()
    INT bfCharset;
 
    /* Get the flags out of the INI file. */
-   bMinOnRun       = GetPrivateProfileInt(szSettings, szMinOnRun,      bMinOnRun,      szTheINIFile);
-   wTextAttribs    = (WORD)GetPrivateProfileInt(szSettings, szLowerCase, wTextAttribs,   szTheINIFile);
-   bStatusBar      = GetPrivateProfileInt(szSettings, szStatusBar,     bStatusBar,     szTheINIFile);
+   bMinOnRun            = GetPrivateProfileInt(szSettings, szMinOnRun,            bMinOnRun,            szTheINIFile);
+   bIndexOnLaunch       = GetPrivateProfileInt(szSettings, szIndexOnLaunch,       bIndexOnLaunch,       szTheINIFile);
+   wTextAttribs         = (WORD)GetPrivateProfileInt(szSettings, szLowerCase,     wTextAttribs,         szTheINIFile);
+   bStatusBar           = GetPrivateProfileInt(szSettings, szStatusBar,           bStatusBar,           szTheINIFile);
+   bDisableVisualStyles = GetPrivateProfileInt(szSettings, szDisableVisualStyles, bDisableVisualStyles, szTheINIFile);
+   bMirrorContent       = GetPrivateProfileInt(szSettings, szMirrorContent,    DefaultLayoutRTL(), szTheINIFile);
 
    bDriveBar       = GetPrivateProfileInt(szSettings, szDriveBar,      bDriveBar,      szTheINIFile);
    bToolbar        = GetPrivateProfileInt(szSettings, szToolbar,       bToolbar,       szTheINIFile);
@@ -320,18 +331,10 @@ VOID
 InitMenus()
 {
    HMENU hMenu;
-   INT iMax;
    TCHAR szValue[MAXPATHLEN];
-   HWND hwndActive;
    HMENU hMenuOptions;
 
    TCHAR szPathName[MAXPATHLEN];
-
-   hwndActive = (HWND)SendMessage(hwndMDIClient, WM_MDIGETACTIVE, 0, 0L);
-   if (hwndActive && GetWindowLongPtr(hwndActive, GWL_STYLE) & WS_MAXIMIZE)
-      iMax = 1;
-   else
-      iMax = 0;
 
    GetPrivateProfileString(szSettings, szUndelete, szNULL, szValue, COUNTOF(szValue), szTheINIFile);
 
@@ -356,7 +359,7 @@ InitMenus()
          }
 
          if (lpfpUndelete) {
-            hMenu = GetSubMenu(GetMenu(hwndFrame), IDM_FILE + iMax);
+            hMenu = GetSubMenu(GetMenu(hwndFrame), MapIDMToMenuPos(IDM_FILE));
             LoadString(hAppInstance, IDS_UNDELETE, szValue, COUNTOF(szValue));
             InsertMenu(hMenu, 4, MF_BYPOSITION | MF_STRING, IDM_UNDELETE, szValue);
          }
@@ -369,7 +372,7 @@ InitMenus()
    //
    // use submenu because we are doing this by position
    //
-   hMenu = GetSubMenu(GetMenu(hwndFrame), IDM_DISK + iMax);
+   hMenu = GetSubMenu(GetMenu(hwndFrame), MapIDMToMenuPos(IDM_DISK));
 
    if (WNetStat(NS_CONNECTDLG)) {  // Network Connections...
 
@@ -407,7 +410,6 @@ InitMenus()
 
    if (nFloppies == 0) {
       EnableMenuItem(hMenu, IDM_DISKCOPY, MF_BYCOMMAND | MF_GRAYED);
-      EnableMenuItem(hMenu, IDM_FORMAT,   MF_BYCOMMAND | MF_GRAYED);
    }
 
 
@@ -415,6 +417,9 @@ InitMenus()
       CheckMenuItem(hMenu, IDM_STATUSBAR, MF_BYCOMMAND | MF_CHECKED);
    if (bMinOnRun)
       CheckMenuItem(hMenu, IDM_MINONRUN,  MF_BYCOMMAND | MF_CHECKED);
+   if (bIndexOnLaunch)
+      CheckMenuItem(hMenu, IDM_INDEXONLAUNCH, MF_BYCOMMAND | MF_CHECKED);
+
    if (bSaveSettings)
       CheckMenuItem(hMenu, IDM_SAVESETTINGS,  MF_BYCOMMAND | MF_CHECKED);
 
@@ -440,6 +445,65 @@ InitMenus()
    DrawMenuBar(hwndFrame);
 }
 
+// maps all IDM_* values, even those of submenus, into a top level menu position;
+// File menu is position 0 except when maximized in which it is position 1;
+// when the security menu is missing (due to not loading acledit.dll),
+// the menus to the right of security are shifted left by one.
+UINT
+MapIDMToMenuPos(UINT idm)
+{
+    UINT pos;
+
+    if (idm < 100)
+    {
+        // idm values < 100 are just the top level menu IDM_ value (e.g., IDM_FILE)
+        pos = idm;
+    }
+    else
+    {
+        // these are the built in or extension menu IDM_ values; IDM_OPEN is 101 and thus pos will be 0 (IDM_FILE)
+        pos = idm / 100 - 1;
+    }
+
+    // if maximized, menu position shifted one to the right
+    HWND hwndActive;
+    hwndActive = (HWND)SendMessage(hwndMDIClient, WM_MDIGETACTIVE, 0, 0L);
+    if (hwndActive && GetWindowLongPtr(hwndActive, GWL_STYLE) & WS_MAXIMIZE)
+        pos++;
+
+    // if pos >= IDM_EXTENSIONS, subtract one if security menu missing
+    if (pos >= IDM_EXTENSIONS && bSecMenuDeleted)
+    {
+        pos--;
+    }
+
+    return pos;
+}
+
+// opposite of the above, but only works for top level menu positions
+UINT  MapMenuPosToIDM(UINT pos)
+{
+    UINT idm = pos;
+
+    // if maximized, idm is one position to the left
+    HWND hwndActive;
+    hwndActive = (HWND)SendMessage(hwndMDIClient, WM_MDIGETACTIVE, 0, 0L);
+    if (hwndActive && GetWindowLongPtr(hwndActive, GWL_STYLE) & WS_MAXIMIZE)
+        idm--;
+
+    // if pos >= IDM_SECURITY, add one if security menu missing
+    if (idm >= IDM_SECURITY && bSecMenuDeleted)
+    {
+        idm++;
+    }
+
+    if (idm >= IDM_EXTENSIONS + iNumExtensions)
+    {
+        idm += MAX_EXTENSIONS - iNumExtensions;
+    }
+
+    return idm;
+}
 
 /*--------------------------------------------------------------------------*/
 /*                                                                          */
@@ -923,6 +987,7 @@ InitFileManager(
 
    HANDLE        hThread;
    DWORD         dwRetval;
+   DWORD         dwExStyle = 0L;
 
    hThread = GetCurrentThread();
 
@@ -937,20 +1002,13 @@ InitFileManager(
    //
    hAppInstance = hInstance;
 
-   lcid = GetThreadLocale();
-
-
-JAPANBEGIN
-   bJapan = (PRIMARYLANGID(LANGIDFROMLCID(lcid)) == LANG_JAPANESE);
-JAPANEND
-
    if (*lpCmdLine)
       nCmdShow = SW_SHOWMINNOACTIVE;
 
    // setup ini file location
    lstrcpy(szTheINIFile, szBaseINIFile);
    dwRetval = GetEnvironmentVariable(TEXT("APPDATA"), szBuffer, MAXPATHLEN);
-   if (dwRetval > 0 && dwRetval <= (MAXPATHLEN - lstrlen(szRoamINIPath) - 1 - lstrlen(szBaseINIFile) - 1)) {
+   if (dwRetval > 0 && dwRetval <= (DWORD)(MAXPATHLEN - lstrlen(szRoamINIPath) - 1 - lstrlen(szBaseINIFile) - 1)) {
 	   wsprintf(szTheINIFile, TEXT("%s%s"), szBuffer, szRoamINIPath);
 	   if (CreateDirectory(szTheINIFile, NULL) || GetLastError() == ERROR_ALREADY_EXISTS) {
 		   wsprintf(szTheINIFile, TEXT("%s%s\\%s"), szBuffer, szRoamINIPath, szBaseINIFile);
@@ -959,6 +1017,26 @@ JAPANEND
 		   wsprintf(szTheINIFile, TEXT("%s\\%s"), szBuffer, szBaseINIFile);
 	   }
    }
+
+   // e.g., UILanguage=zh-CN; UI language defaults to OS set language or English if that language is not supported.
+   GetPrivateProfileString(szSettings, szUILanguage, szNULL, szTemp, COUNTOF(szTemp), szTheINIFile);
+   if (szTemp[0])
+   {
+       LCID lcidUI = LocaleNameToLCID(szTemp, 0);
+       if (lcidUI != 0)
+       {
+           SetThreadUILanguage((LANGID)lcidUI);
+
+           // update to current local used for dispaly
+           SetThreadLocale(lcidUI);
+       }
+   }
+
+   lcid = GetThreadLocale();
+
+JAPANBEGIN
+   bJapan = (PRIMARYLANGID(LANGIDFROMLCID(lcid)) == LANG_JAPANESE);
+JAPANEND
 
    //
    // Constructors for info system.
@@ -1006,6 +1084,8 @@ JAPANEND
    //
    GetSettings();
 
+   dwExStyle = MainWindowExStyle();
+
    dyBorder = GetSystemMetrics(SM_CYBORDER);
    dyBorderx2 = dyBorder * 2;
    dxFrame = GetSystemMetrics(SM_CXFRAME) - dyBorder;
@@ -1014,6 +1094,8 @@ JAPANEND
    dyDriveBitmap = DRIVES_HEIGHT;
    dxFolder = FILES_WIDTH;
    dyFolder = FILES_HEIGHT;
+
+   LoadUxTheme();
 
    if (!LoadBitmaps())
       return FALSE;
@@ -1079,7 +1161,7 @@ JAPANEND
    wHelpMessage = RegisterWindowMessage(TEXT("ShellHelp"));
    wBrowseMessage = RegisterWindowMessage(TEXT("commdlg_help"));
 
-   hhkMsgFilter = SetWindowsHook(WH_MSGFILTER, (HOOKPROC)MessageFilter);
+   hhkMsgFilter = SetWindowsHook(WH_MSGFILTER, MessageFilter);
 
    hcurArrow = LoadCursor(NULL, IDC_ARROW);
 
@@ -1218,15 +1300,21 @@ JAPANEND
 
    // right and bottom are width and height, so convert to coordinates
 
+   // NOTE: in the cold startup case (no value in winfile.ini), the coordinates are
+   // left: CW_USEDEFAULT, top: 0, right: CW_USEDEFAULT, bottom: 0.
+
    win.rc.right += win.rc.left;
    win.rc.bottom += win.rc.top;
 
    if (!IntersectRect(&rcS, &rcT, &win.rc))
    {
-      // window off virtual screen or initial case; put in main work area on primary screen
-	   SystemParametersInfo(SPI_GETWORKAREA, 0, (PVOID)&rcT, 0);
-	   rcT.right = rcT.bottom = (LONG)CW_USEDEFAULT;
-       win.rc = rcT;
+      // window off virtual screen or initial case; reset to defaults
+       win.rc.right = win.rc.left = (LONG)CW_USEDEFAULT;
+       win.rc.top = win.rc.bottom = 0;
+
+       // compenstate as above so the conversion below still results in the defaults
+       win.rc.right += win.rc.left;
+       win.rc.bottom += win.rc.top;
    }
 
    // Now convert back again
@@ -1265,7 +1353,7 @@ JAPANEND
    }
 
 
-   if (!CreateWindowEx(0L, szFrameClass, szTitle, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+   if (!CreateWindowEx(dwExStyle, szFrameClass, szTitle, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
       win.rc.left, win.rc.top, win.rc.right, win.rc.bottom,
       NULL, NULL, hInstance, NULL)) {
 
@@ -1293,7 +1381,7 @@ JAPANEND
 
    hThreadUpdate = CreateThread( NULL,
       0L,
-      (LPTHREAD_START_ROUTINE)UpdateInit,
+      UpdateInit,
       NULL,
       0L,
       &Ignore);
@@ -1449,7 +1537,10 @@ JAPANEND
 
    SetThreadPriority(hThread, THREAD_PRIORITY_NORMAL);
 
-   StartBuildingDirectoryTree();
+   if (bIndexOnLaunch)
+   {
+      StartBuildingDirectoryTrie();
+   }
 
    return TRUE;
 }
@@ -1587,5 +1678,54 @@ LoadFailMessage(VOID)
    return;
 }
 
-
-
+/////////////////////////////////////////////////////////////////////
+//
+// Name:     LoadUxTheme
+//
+// Synopsis: Loads function SetWindowTheme dynamically
+//
+// IN:       VOID
+//
+// Return:   BOOL  T=Success, F=FAILURE
+//
+//
+// Assumes:
+//
+// Effects:  hUxTheme, lpfnSetWindowTheme
+//
+//
+// Notes:
+//
+/////////////////////////////////////////////////////////////////////
+
+BOOL
+LoadUxTheme(VOID)
+{
+  UINT uErrorMode;
+
+  //
+  // Have we already loaded it?
+  //
+  if (hUxTheme)
+    return TRUE;
+
+  //
+  // Let the system handle errors here
+  //
+  uErrorMode = SetErrorMode(0);
+  hUxTheme = LoadLibrary(UXTHEME_DLL);
+  SetErrorMode(uErrorMode);
+
+  if (!hUxTheme)
+    return FALSE;
+
+#define GET_PROC(x) \
+   if (!(lpfn##x = (PVOID) GetProcAddress(hUxTheme, UXTHEME_##x))) \
+      return FALSE
+
+  GET_PROC(SetWindowTheme);
+
+#undef GET_PROC
+
+  return TRUE;
+}

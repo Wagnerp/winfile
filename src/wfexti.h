@@ -19,15 +19,12 @@ typedef struct _EXTENSION {                                     /* ;Internal */
         WORD     Delta;                                         /* ;Internal */
         HANDLE   hModule;                                       /* ;Internal */
         HMENU    hMenu;                                         /* ;Internal */
-        DWORD    dwFlags;                                       /* ;Internal */
         HBITMAP  hbmButtons;                                    /* ;Internal */
         WORD     idBitmap;                                      /* ;Internal */
+        WORD     iStartBmp;                                     /* ;Internal */
+        BOOL     bRestored;                                     /* ;Internal */
         BOOL     bUnicode;                                      /* ;Internal */
 } EXTENSION;                                                    /* ;Internal */
-
-// !! WARNING !!
-// MAX_EXTENSIONS is assumed 5 in winfile
-// Must be changed there LATER
 
 #define MAX_EXTENSIONS 10                                       /* ;Internal */
 extern EXTENSION extensions[MAX_EXTENSIONS];                    /* ;Internal */
@@ -36,4 +33,3 @@ LRESULT ExtensionMsgProc(UINT wMsg, WPARAM wParam, LPARAM lpSel);    /* ;Interna
 VOID FreeExtensions(VOID);                                      /* ;Internal */
 
 #endif /* _INC_WFEXTI */
-

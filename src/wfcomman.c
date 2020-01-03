@@ -19,7 +19,9 @@
 #include <commctrl.h>
 #include <ole2.h>
 
+#ifndef HELP_PARTIALKEY
 #define HELP_PARTIALKEY 0x0105L    // call the search engine in winhelp
+#endif
 
 #define VIEW_NOCHANGE VIEW_PLUSES
 
@@ -599,7 +601,7 @@ OpenOrEditSelection(HWND hwndActive, BOOL fEdit)
    DWORD ret;
    HCURSOR hCursor;
 
-   WCHAR szPath[MAXPATHLEN];
+   WCHAR szPath[MAXPATHLEN+2];  // +2 for quotes if needed
 
    HWND hwndTree, hwndDir, hwndFocus;
 
@@ -646,7 +648,8 @@ OpenOrEditSelection(HWND hwndActive, BOOL fEdit)
    if (!p)
       goto OpenExit;
 
-   if (!GetNextFile(p, szPath, COUNTOF(szPath)) || !szPath[0])
+   // less 2 characters in case we need to add quotes below
+   if (!GetNextFile(p, szPath, COUNTOF(szPath)-2) || !szPath[0])
       goto OpenFreeExit;
 
    if (bDir) {
@@ -689,30 +692,25 @@ OpenOrEditSelection(HWND hwndActive, BOOL fEdit)
       //
       if (fEdit)
       {
-          // check if notepad++ exists: %ProgramFiles%\Notepad++\notepad++.exe
-          TCHAR szToRun[MAXPATHLEN];
+          TCHAR szEditPath[MAX_PATH];
+          TCHAR szNotepad[MAX_PATH];
 
-          DWORD cchEnv = GetEnvironmentVariable(TEXT("ProgramFiles"), szToRun, MAXPATHLEN);
-          if (cchEnv != 0)
-          {
-            // NOTE: assume ProgramFiles directory and "\\Notepad++\\notepad++.exe" never exceed MAXPATHLEN
-            lstrcat(szToRun, TEXT("\\Notepad++\\notepad++.exe"));
-            if (!PathFileExists(szToRun))
-            {
-                cchEnv = 0;
-            }
-          }
+          // NOTE: assume system directory and "\\notepad.exe" never exceed MAXPATHLEN
+          if (GetSystemDirectory(szNotepad, MAXPATHLEN) != 0)
+              lstrcat(szNotepad, TEXT("\\notepad.exe"));
+          else
+              lstrcpy(szNotepad, TEXT("notepad.exe"));
 
-          if (cchEnv == 0)
-          {
-              // NOTE: assume system directory and "\\notepad.exe" never exceed MAXPATHLEN
-              if (GetSystemDirectory(szToRun, MAXPATHLEN) != 0)
-                  lstrcat(szToRun, TEXT("\\notepad.exe"));
-              else
-                  lstrcpy(szToRun, TEXT("notepad.exe"));
-          }
+          GetPrivateProfileString(szSettings, szEditorPath, szNotepad, szEditPath, MAX_PATH, szTheINIFile);
 
-          ret = ExecProgram(szToRun, szPath, NULL, (GetKeyState(VK_SHIFT) < 0), FALSE);
+          CheckEsc(szPath);     // add quotes if necessary; reserved space for them above
+
+          if(wcslen(szEditPath))
+             ret = ExecProgram(szEditPath, szPath, NULL, (GetKeyState(VK_SHIFT) < 0), FALSE);
+          //If INI entry is empty
+          else
+             ret = ExecProgram(szNotepad, szPath, NULL, (GetKeyState(VK_SHIFT) < 0), FALSE);
+
       }
       else
       {
@@ -852,6 +850,28 @@ GetPowershellExePath(LPTSTR szPSPath)
     return szPSPath[0] != TEXT('\0');
 }
 
+BOOL GetBashExePath(LPTSTR szBashPath, UINT bufSize)
+{
+	const TCHAR szBashFilename[] = TEXT("bash.exe");
+	UINT len;
+
+	len = GetSystemDirectory(szBashPath, bufSize);
+	if ((len != 0) && (len + COUNTOF(szBashFilename) + 1 < bufSize) && PathAppend(szBashPath, TEXT("bash.exe")))
+	{
+		if (PathFileExists(szBashPath))
+			return TRUE;
+	}
+
+	// If we are running 32 bit Winfile on 64 bit Windows, System32 folder is redirected to SysWow64, which
+	// doesn't include bash.exe. So we also need to check Sysnative folder, which always maps to System32 folder.
+	len = ExpandEnvironmentStrings(TEXT("%SystemRoot%\\Sysnative\\bash.exe"), szBashPath, bufSize);
+	if (len != 0 && len <= bufSize)
+	{
+		return PathFileExists(szBashPath);
+	}
+
+	return FALSE;
+}
 /*--------------------------------------------------------------------------*/
 /*                                                                          */
 /*  AppCommandProc() -                                                      */
@@ -862,7 +882,6 @@ BOOL
 AppCommandProc(register DWORD id)
 {
    DWORD         dwFlags;
-   BOOL          bMaxed;
    HMENU         hMenu;
    register HWND hwndActive;
    BOOL          bTemp;
@@ -871,11 +890,6 @@ AppCommandProc(register DWORD id)
    INT           ret;
 
    hwndActive = (HWND)SendMessage(hwndMDIClient, WM_MDIGETACTIVE, 0, 0L);
-   if (hwndActive && GetWindowLongPtr(hwndActive, GWL_STYLE) & WS_MAXIMIZE)
-      bMaxed = 1;
-   else
-      bMaxed = 0;
-
 
    dwContext = IDH_HELPFIRST + id;
 
@@ -954,11 +968,11 @@ AppCommandProc(register DWORD id)
       
    case IDM_ASSOCIATE:
 
-      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(ASSOCIATEDLG), hwndFrame, (DLGPROC)AssociateDlgProc);
+      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(ASSOCIATEDLG), hwndFrame, AssociateDlgProc);
       break;
 
    case IDM_GOTODIR:
-      DialogBox(hAppInstance, (LPTSTR)MAKEINTRESOURCE(GOTODIRDLG), hwndFrame, (DLGPROC)GotoDirDlgProc);
+      DialogBox(hAppInstance, (LPTSTR)MAKEINTRESOURCE(GOTODIRDLG), hwndFrame, GotoDirDlgProc);
 	  break;
 
    case IDM_HISTORYBACK:
@@ -989,18 +1003,18 @@ AppCommandProc(register DWORD id)
          // Just create old dialog
          //
 
-         CreateDialog(hAppInstance, (LPTSTR) MAKEINTRESOURCE(SEARCHPROGDLG), hwndFrame, (DLGPROC)SearchProgDlgProc);
+         CreateDialog(hAppInstance, (LPTSTR) MAKEINTRESOURCE(SEARCHPROGDLG), hwndFrame, SearchProgDlgProc);
          break;
       }
 
       dwSuperDlgMode = IDM_SEARCH;
 
-      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(SEARCHDLG), hwndFrame, (DLGPROC)SearchDlgProc);
+      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(SEARCHDLG), hwndFrame, SearchDlgProc);
       break;
 
    case IDM_RUN:
 
-      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(RUNDLG), hwndFrame, (DLGPROC)RunDlgProc);
+      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(RUNDLG), hwndFrame, RunDlgProc);
       break;
 
    case IDM_STARTCMDSHELL:
@@ -1077,6 +1091,36 @@ AppCommandProc(register DWORD id)
        }
        break;
 
+	case IDM_STARTBASHSHELL:
+		{
+			BOOL bRunAs;
+			BOOL bDir;
+			TCHAR szToRun[MAXPATHLEN];
+			LPTSTR szDir;
+
+			szDir = GetSelection(1 | 4 | 16, &bDir);
+			if (!bDir && szDir)
+				StripFilespec(szDir);
+
+			bRunAs = GetKeyState(VK_SHIFT) < 0;
+
+			if (GetBashExePath(szToRun, COUNTOF(szToRun))) {
+				ret = ExecProgram(szToRun, NULL, szDir, FALSE, bRunAs);
+			}
+
+			LocalFree(szDir);
+		}
+		break;
+
+   case IDM_CLOSEWINDOW:
+       {
+           HWND      hwndActive;
+
+           hwndActive = (HWND)SendMessage(hwndMDIClient, WM_MDIGETACTIVE, 0, 0L);
+           PostMessage(hwndActive, WM_CLOSE, 0, 0L);
+       }
+       break;
+
    case IDM_SELECT:
 
       // push the focus to the dir half so when they are done
@@ -1086,7 +1130,7 @@ AppCommandProc(register DWORD id)
       if (hwndT = HasDirWindow(hwndActive))
          SetFocus(hwndT);
 
-      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(SELECTDLG), hwndFrame, (DLGPROC)SelectDlgProc);
+      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(SELECTDLG), hwndFrame, SelectDlgProc);
       break;
 
    case IDM_MOVE:
@@ -1094,7 +1138,7 @@ AppCommandProc(register DWORD id)
    case IDM_RENAME:
       dwSuperDlgMode = id;
 
-      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(MOVECOPYDLG), hwndFrame, (DLGPROC)SuperDlgProc);
+      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(MOVECOPYDLG), hwndFrame, SuperDlgProc);
       break;
 
    case IDM_PASTE:
@@ -1173,13 +1217,13 @@ AppCommandProc(register DWORD id)
    case IDM_PRINT:
       dwSuperDlgMode = id;
 
-      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(MYPRINTDLG), hwndFrame, (DLGPROC)SuperDlgProc);
+      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(MYPRINTDLG), hwndFrame, SuperDlgProc);
       break;
 
    case IDM_DELETE:
       dwSuperDlgMode = id;
 
-      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(DELETEDLG), hwndFrame, (DLGPROC)SuperDlgProc);
+      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(DELETEDLG), hwndFrame, SuperDlgProc);
       break;
 
    case IDM_COPYTOCLIPBOARD:
@@ -1320,14 +1364,14 @@ AppCommandProc(register DWORD id)
 			 ShellExecuteEx(&sei);
 		 }
          else if (count > 1)
-            DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(MULTIPLEATTRIBSDLG), hwndFrame, (DLGPROC) AttribsDlgProc);
+            DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(MULTIPLEATTRIBSDLG), hwndFrame, AttribsDlgProc);
 
 #if 0
          else if (bDir)
-            DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(ATTRIBSDLGDIR), hwndFrame, (DLGPROC) AttribsDlgProc);
+            DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(ATTRIBSDLGDIR), hwndFrame, AttribsDlgProc);
 
          else
-            DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(ATTRIBSDLG), hwndFrame, (DLGPROC) AttribsDlgProc);
+            DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(ATTRIBSDLG), hwndFrame, AttribsDlgProc);
 #endif 
          break;
       }
@@ -1381,7 +1425,7 @@ AppCommandProc(register DWORD id)
       }
 
    case IDM_MAKEDIR:
-      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(MAKEDIRDLG), hwndFrame, (DLGPROC)MakeDirDlgProc);
+      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(MAKEDIRDLG), hwndFrame, MakeDirDlgProc);
       break;
 
    case IDM_SELALL:
@@ -1512,7 +1556,7 @@ AppCommandProc(register DWORD id)
       if (!FmifsLoaded())
          break;
 
-      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(DISKLABELDLG), hwndFrame, (DLGPROC)DiskLabelDlgProc);
+      DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(DISKLABELDLG), hwndFrame, DiskLabelDlgProc);
       break;
 
    case IDM_DISKCOPY:
@@ -1528,7 +1572,7 @@ AppCommandProc(register DWORD id)
          // Just create old dialog
          //
 
-         CreateDialog(hAppInstance, (LPTSTR) MAKEINTRESOURCE(CANCELDLG), hwndFrame, (DLGPROC) CancelDlgProc);
+         CreateDialog(hAppInstance, (LPTSTR) MAKEINTRESOURCE(CANCELDLG), hwndFrame, CancelDlgProc);
 
          break;
       }
@@ -1576,39 +1620,28 @@ AppCommandProc(register DWORD id)
 
          LockFormatDisk(i,i,IDS_DRIVEBUSY_COPY, IDM_FORMAT, TRUE);
 
-         CreateDialog(hAppInstance, (LPTSTR) MAKEINTRESOURCE(CANCELDLG), hwndFrame, (DLGPROC) CancelDlgProc);
+         CreateDialog(hAppInstance, (LPTSTR) MAKEINTRESOURCE(CANCELDLG), hwndFrame, CancelDlgProc);
 
       } else {
          dwSuperDlgMode = id;
-         ret = DialogBox(hAppInstance, MAKEINTRESOURCE(CHOOSEDRIVEDLG), hwndFrame, (DLGPROC)ChooseDriveDlgProc);
+         ret = DialogBox(hAppInstance, MAKEINTRESOURCE(CHOOSEDRIVEDLG), hwndFrame, ChooseDriveDlgProc);
       }
 
       break;
 
    case IDM_FORMAT:
 
-      if (CancelInfo.hCancelDlg) {
-         SetFocus(CancelInfo.hCancelDlg);
-         break;
+      if (!hwndFormatSelect)
+      {
+         hwndFormatSelect = CreateDialog(hAppInstance, (LPTSTR)MAKEINTRESOURCE(FORMATSELECTDLG),
+            hwndFrame, FormatSelectDlgProc);
+      }
+      else
+      {
+         ShowWindow(hwndFormatSelect, SW_SHOW);
+         SetActiveWindow(hwndFormatSelect);
       }
 
-      if (CancelInfo.hThread) {
-         //
-         // Don't create any new worker threads
-         // Just create old dialog
-         //
-
-         CreateDialog(hAppInstance, (LPTSTR) MAKEINTRESOURCE(CANCELDLG), hwndFrame, (DLGPROC) CancelDlgProc);
-
-         return TRUE;
-      }
-
-      if (!FmifsLoaded())
-         break;
-
-      // Don't use modal dialog box
-
-      FormatDiskette(hwndFrame,FALSE);
       break;
 
    case IDM_SHAREAS:
@@ -1830,7 +1863,7 @@ DealWithNetError_NotifyResume:
        goto ChangeDisplay;
 
     case IDM_VOTHER:
-       DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(OTHERDLG), hwndFrame, (DLGPROC)OtherDlgProc);
+       DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(OTHERDLG), hwndFrame, OtherDlgProc);
 
        dwFlags = GetWindowLongPtr(hwndActive, GWL_VIEW) & VIEW_EVERYTHING;
        if (dwFlags != VIEW_NAMEONLY && dwFlags != VIEW_EVERYTHING)
@@ -1862,11 +1895,15 @@ ChangeDisplay:
           break;
 
     case IDM_VINCLUDE:
-       DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(INCLUDEDLG), hwndFrame, (DLGPROC)IncludeDlgProc);
+       DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(INCLUDEDLG), hwndFrame, IncludeDlgProc);
        break;
 
     case IDM_CONFIRM:
-       DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(CONFIRMDLG), hwndFrame, (DLGPROC)ConfirmDlgProc);
+       DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(CONFIRMDLG), hwndFrame, ConfirmDlgProc);
+       break;
+
+    case IDM_PREF:
+       DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(PREFDLG), hwndFrame, PrefDlgProc);
        break;
 
     case IDM_STATUSBAR:
@@ -1972,12 +2009,18 @@ ChangeDisplay:
     case IDM_MINONRUN:
        bTemp = bMinOnRun = !bMinOnRun;
        WritePrivateProfileBool(szMinOnRun, bMinOnRun);
+       goto CHECK_OPTION;
+
+    case IDM_INDEXONLAUNCH:
+       bTemp = bIndexOnLaunch = !bIndexOnLaunch;
+       WritePrivateProfileBool(szIndexOnLaunch, bIndexOnLaunch);
+       goto CHECK_OPTION;
 
 CHECK_OPTION:
        //
        // Check/Uncheck the menu item.
        //
-       hMenu = GetSubMenu(GetMenu(hwndFrame), IDM_OPTIONS + bMaxed);
+       hMenu = GetSubMenu(GetMenu(hwndFrame), MapIDMToMenuPos(IDM_OPTIONS));
        CheckMenuItem(hMenu, id, (bTemp ? MF_CHECKED : MF_UNCHECKED));
        break;
 
@@ -2055,7 +2098,7 @@ CHECK_OPTION:
 
           EnableDisconnectButton();
 
-		  StartBuildingDirectoryTree();
+		  StartBuildingDirectoryTrie();
 
           break;
        }
@@ -2079,12 +2122,11 @@ ACPCallHelp:
        break;
 
     case IDM_ABOUT:
-       LoadString(hAppInstance, IDS_WINFILE, szTitle, COUNTOF(szTitle));
-       ShellAbout(hwndFrame, szTitle, NULL, NULL);
+       DialogBox(hAppInstance, (LPTSTR)MAKEINTRESOURCE(ABOUTDLG), hwndFrame, AboutDlgProc);
        break;
 
     case IDM_DRIVESMORE:
-       DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(DRIVEDLG), hwndFrame, (DLGPROC)DrivesDlgProc);
+       DialogBox(hAppInstance, (LPTSTR) MAKEINTRESOURCE(DRIVEDLG), hwndFrame, DrivesDlgProc);
        break;
 
     default:
@@ -2147,22 +2189,14 @@ VOID
 InitNetMenuItems(VOID)
 {
    HMENU hMenu;
-   INT iMax;
    TCHAR szValue[MAXPATHLEN];
-   HWND hwndActive;
 
-
-   hwndActive = (HWND)SendMessage(hwndMDIClient, WM_MDIGETACTIVE, 0, 0L);
-   if (hwndActive && GetWindowLongPtr(hwndActive, GWL_STYLE) & WS_MAXIMIZE)
-      iMax = 1;
-   else
-      iMax = 0;
    hMenu = GetMenu(hwndFrame);
 
    // No. Now add net items if net has been started.
    // use submenu because we are doing this by position
 
-   hMenu = GetSubMenu(hMenu, IDM_DISK + iMax);
+   hMenu = GetSubMenu(hMenu, MapIDMToMenuPos(IDM_DISK));
 
    if (WNetStat(NS_CONNECTDLG)) {
 
@@ -2272,7 +2306,7 @@ ReadMoveStatus()
 
 	OleGetClipboard(&pDataObj);		// pDataObj == NULL if error
 
-	if (pDataObj != NULL && pDataObj->lpVtbl->GetData(pDataObj, &fmtetcEffect, &stgmed) == S_OK)
+	if (pDataObj != NULL && pDataObj->lpVtbl->GetData(pDataObj, &fmtetcEffect, &stgmed) == S_OK && stgmed.hGlobal != NULL)
 	{
 		LPDWORD lpEffect = GlobalLock(stgmed.hGlobal);
 		if (*lpEffect & DROPEFFECT_COPY) dwEffect = DROPEFFECT_COPY;

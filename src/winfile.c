@@ -259,13 +259,14 @@ InitPopupMenus(UINT uMenus, HMENU hMenu, HWND hwndActive)
       pSel = (LPTSTR)SendMessage(hwndActive, FS_GETSELECTION, 5, (LPARAM)&bDir);
 
       //
-      // can't print a dir
+      // can't print or edit a dir
       //
       uMenuFlags = bDir
          ? MF_BYCOMMAND | MF_DISABLED | MF_GRAYED
          : MF_BYCOMMAND | MF_ENABLED;
 
       EnableMenuItem(hMenu, IDM_PRINT, uMenuFlags);
+      EnableMenuItem(hMenu, IDM_EDIT, uMenuFlags);
 
       //
       // See if we can enable the Properties... menu
@@ -481,6 +482,7 @@ InitPopupMenus(UINT uMenus, HMENU hMenu, HWND hwndActive)
 
 
 LRESULT
+CALLBACK
 FrameWndProc(HWND hwnd, UINT wMsg, WPARAM wParam, LPARAM lParam)
 {
    RECT     rc;
@@ -722,16 +724,12 @@ FrameWndProc(HWND hwnd, UINT wMsg, WPARAM wParam, LPARAM lParam)
          // Store the Frame's hwnd.
          hwndFrame = hwnd;
 
-         // Fill up this array with some popup menus.
-
          hMenu2 = GetMenu(hwnd);
-         dwMenuIDs[3] = (DWORD)GetSubMenu(hMenu2, IDM_EXTENSIONS);
-         dwMenuIDs[5] = (DWORD)GetSubMenu(hMenu2, IDM_EXTENSIONS+1);
 
          // the extensions haven't been loaded yet so the window
          // menu is in the position of the first extensions menu
 
-         ccs.hWindowMenu = (HWND)dwMenuIDs[3];
+         ccs.hWindowMenu = (HWND)GetSubMenu(hMenu2, IDM_EXTENSIONS);
          ccs.idFirstChild = IDM_CHILDSTART;
 
          // create the MDI client at approximate size to make sure
@@ -806,15 +804,9 @@ FrameWndProc(HWND hwnd, UINT wMsg, WPARAM wParam, LPARAM lParam)
          HWND      hwndActive;
          UINT      uMenu;
          INT       index;
-         BOOL      bMaxed;
 
          hwndActive = (HWND)SendMessage(hwndMDIClient, WM_MDIGETACTIVE, 0, 0L);
-         if (hwndActive && GetWindowLongPtr(hwndActive, GWL_STYLE) & WS_MAXIMIZE)
-            bMaxed = 1;
-         else
-            bMaxed = 0;
-
-         uMenu = (UINT)LOWORD(lParam) - bMaxed;
+         uMenu = MapMenuPosToIDM((UINT)LOWORD(lParam));
 
          if (uMenu == IDM_SECURITY) {
 
@@ -1145,9 +1137,12 @@ DoDefault:
 }
 
 
-INT
-MessageFilter(INT nCode, WPARAM wParam, LPMSG lpMsg)
+LRESULT
+CALLBACK 
+MessageFilter(INT nCode, WPARAM wParam, LPARAM lParam)
 {
+   LPMSG lpMsg = (LPMSG)lParam;
+
    if (nCode < 0)
       goto DefHook;
 
@@ -1311,6 +1306,9 @@ bDialogMessage(PMSG pMsg)
       !CancelInfo.bModal &&
       IsDialogMessage(CancelInfo.hCancelDlg, pMsg)) ||
 
+      (hwndFormatSelect &&
+      IsDialogMessage(hwndFormatSelect, pMsg)) ||
+
       (SearchInfo.hSearchDlg &&
       IsDialogMessage(SearchInfo.hSearchDlg, pMsg)))
 
@@ -1319,4 +1317,3 @@ bDialogMessage(PMSG pMsg)
    return FALSE;
 }
 
-

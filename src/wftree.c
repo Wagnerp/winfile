@@ -272,6 +272,8 @@ ResizeSplit(HWND hwnd, INT dxSplit)
 
    SetWindowLongPtr(hwnd, GWL_SPLIT, dxSplit);
 
+   SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)GetTreeIcon(hwnd));
+
    UpdateStatus(hwnd);
    EnableCheckTBButtons(hwnd);
 
@@ -347,6 +349,7 @@ SwitchDriveSelection(HWND hwndChild, BOOL bSelectToolbarDrive)
 // directory tree child windows.
 
 LRESULT
+CALLBACK
 TreeWndProc(
    register HWND hwnd,
    UINT uMsg,
@@ -373,6 +376,14 @@ TreeWndProc(
          hMenu = GET_WM_MENUSELECT_HMENU(wParam, lParam);
 
          bMDIFrameSysMenu = FALSE;
+      }
+
+      if (uMenuFlags & MF_POPUP)
+      {
+          // NormalHelp with MF_POPUP case; fix up ids to workaround some bugs in MenuHelp
+          INT idm = MapMenuPosToIDM(uMenuID);
+          dwMenuIDs[MHPOP_CURRENT] = MH_POPUP + idm;
+          dwMenuIDs[MHPOP_CURRENT + 1] = uMenuID;
       }
 
       MenuHelp((WORD)uMsg, wParam, lParam, GetMenu(hwndFrame),
@@ -931,4 +942,3 @@ ResizeWindows(HWND hwndParent,INT dxWindow, INT dyWindow)
    UpdateWindow(hwndParent);
 }
 
-

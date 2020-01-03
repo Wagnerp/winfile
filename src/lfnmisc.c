@@ -201,7 +201,7 @@ WORD I_LFNEditName( LPTSTR lpSrc, LPTSTR lpEd, LPTSTR lpRes, INT iResBufSize )
    LPTSTR lpChar;
 
    //
-   // We have a special case hack for the the dot, since when we do a
+   // We have a special case hack for the dot, since when we do a
    // rename from foo.bar.baz to *.txt, we want to use the last dot, not
    // the first one (desired result = foo.bar.txt, not foo.txt)
    //
@@ -244,13 +244,9 @@ WORD I_LFNEditName( LPTSTR lpSrc, LPTSTR lpEd, LPTSTR lpRes, INT iResBufSize )
                   ( *lpSrc != CHAR_NULL ) && ( *lpSrc != delimit )) {
 #endif
 
-                  if (ResLen < iResBufSize) {
+                  *(lpRes++) = *(lpSrc++);
+                  ResLen++;
 
-                     *(lpRes++) = *(lpSrc++);
-                     ResLen++;
-                  }
-                  else
-                     return ERROR_INVALID_PARAMETER ;
                }
             }
             break;

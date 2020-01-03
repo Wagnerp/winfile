@@ -17,7 +17,7 @@
 
 #include "wfdrop.h"
 
-WCHAR   szAttr[]        = L"RHSAC";
+WCHAR   szAttr[]        = L"RHSACE";
 
 typedef struct _SELINFO {
    LPWSTR pSel;
@@ -67,6 +67,8 @@ DrawItem(
 
    HDC hDC = lpLBItem->hDC;
 
+   PreserveBitmapInRTL(hDC);
+
    HWND hwndListParms = (HWND)GetWindowLongPtr(hwnd, GWL_LISTPARMS);
    BOOL bLower;
 
@@ -109,7 +111,8 @@ DrawItem(
    else
    {
       //
-      //  Set Text color of Compressed items to BLUE.
+      //  Set Text color of Compressed items to BLUE and Encrypted items
+      //  to GREEN.
       //
       //  LATER:
       //  Should allow for User selection in the future.
@@ -117,6 +120,10 @@ DrawItem(
       if ((lpxdta) && (lpxdta->dwAttrs & ATTR_COMPRESSED))
       {
          rgbText = SetTextColor(hDC, RGB(0, 0, 255));
+      }
+      else if ((lpxdta) && (lpxdta->dwAttrs & ATTR_ENCRYPTED))
+      {
+         rgbText = SetTextColor(hDC, RGB(0, 192, 0));
       }
       else
       {
@@ -395,7 +402,7 @@ CreateLBLine(register DWORD dwLineFormat, LPXDTA lpxdta, LPWSTR szBuffer)
 }
 
 
-LRESULT DirListBoxWndProc(HWND hWnd, UINT wMsg, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK DirListBoxWndProc(HWND hWnd, UINT wMsg, WPARAM wParam, LPARAM lParam)
 {
     switch (wMsg)
     {
@@ -407,6 +414,7 @@ LRESULT DirListBoxWndProc(HWND hWnd, UINT wMsg, WPARAM wParam, LPARAM lParam)
 }
 
 LRESULT
+CALLBACK
 DirWndProc(
    HWND hwnd,
    UINT uMsg,
@@ -599,7 +607,7 @@ DirWndProc(
       UINT  cItems;
       LPWSTR szItem;
       WCHAR rgchMatch[MAXPATHLEN];
-      INT cchMatch;
+      SIZE_T cchMatch;
 
       if ((ch = LOWORD(wParam)) <= CHAR_SPACE || !GetWindowLongPtr(hwnd, GWL_HDTA))
          return(-1L);
@@ -1993,6 +2001,12 @@ PutAttributes(
       cch++;
    }
 
+   if (dwAttribute & ATTR_ENCRYPTED)
+   {
+      *pszStr++ = szAttr[5];
+      cch++;
+   }
+
    *pszStr = CHAR_NULL;
    return(cch);
 }
@@ -2900,8 +2914,10 @@ UsedAltname:
       if (iSelType & 1)
          goto GDSExit;
 
-      if ((!bLFNTest) && ((i + 1) < iMac))
-         lstrcat(p, szBlank);
+      if ((!bLFNTest) && ((i + 1) < iMac)) {
+          if (p)
+              lstrcat(p, szBlank);
+      }
    }
 
 GDSExit:

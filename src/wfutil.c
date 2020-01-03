@@ -242,7 +242,7 @@ BOOL  GetDriveDirectory(INT iDrive, LPTSTR pszDir)
         drvstr[1] = ('\0');
     }
 
-	if (GetFileAttributes(drvstr) == (DWORD)(-1))
+	if (GetFileAttributes(drvstr) == INVALID_FILE_ATTRIBUTES)
 		return FALSE;
 
 //	if (!CheckDirExists(drvstr))
@@ -461,11 +461,11 @@ AddCommasInternal(LPTSTR szBuf, DWORD dw)
    // if *szComma[0] == NULL, get out now
 
    if (!szComma[0]) {
-      wsprintf(szBuf,TEXT("%ld"),dw);
+      wsprintf(szBuf,TEXT("%lu"),dw);
       return szBuf;
    }
 
-   len = wsprintf(szTemp, TEXT("%ld"), dw);
+   len = wsprintf(szTemp, TEXT("%lu"), dw);
    iCommaLen = lstrlen(szComma);
 
    pTemp = szTemp + len - 1;

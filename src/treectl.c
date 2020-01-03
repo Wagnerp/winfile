@@ -309,7 +309,7 @@ InsertDirectory(
 
    pNode->pParent = pParentNode;
    pNode->nLevels = pParentNode ? (pParentNode->nLevels + (BYTE)1) : (BYTE)0;
-   pNode->wFlags  = (BYTE)NULL;
+   pNode->wFlags  = 0;
    pNode->dwNetType = (DWORD)-1;
 
 #ifdef USE_TF_LFN
@@ -437,10 +437,10 @@ InsertDirectory(
    //
    //  Set the attributes for this directory.
    //
-   if (dwAttribs == (DWORD)(-1))
+   if (dwAttribs == INVALID_FILE_ATTRIBUTES)
    {
        GetTreePath(pNode, szPathName);
-       if ((pNode->dwAttribs = GetFileAttributes(szPathName)) == (DWORD)(-1))
+       if ((pNode->dwAttribs = GetFileAttributes(szPathName)) == INVALID_FILE_ATTRIBUTES)
        {
            pNode->dwAttribs = 0;
        }
@@ -1394,7 +1394,7 @@ EmptyStatusAndReturn:
       StripBackslash(szPath);
 
       SetStatusText(SBT_NOBORDERS|255, SST_FORMAT|SST_RESOURCE,
-               (LPTSTR)(DWORD)(fShowSourceBitmaps ? IDS_DRAG_COPYING : IDS_DRAG_MOVING),
+               (LPCTSTR)(DWORD)(fShowSourceBitmaps ? IDS_DRAG_COPYING : IDS_DRAG_MOVING),
                szPath);
       UpdateWindow(hwndStatus);
 
@@ -1519,6 +1519,8 @@ TCWP_DrawItem(
   hdc = lpLBItem->hDC;
   pNode = (PDNODE)lpLBItem->itemData;
 
+  PreserveBitmapInRTL(hdc);
+
   /*
    *  Save the real extent.
    */
@@ -1587,11 +1589,16 @@ TCWP_DrawItem(
       else
       {
           //
-          //  Set Text color of Compressed items to BLUE.
+          //  Set Text color of Compressed items to BLUE and Encrypted items
+          //  to GREEN.
           //
           if (pNode->dwAttribs & ATTR_COMPRESSED)
           {
               rgbText = SetTextColor(hdc, RGB(0, 0, 255));
+          }
+          else if (pNode->dwAttribs & ATTR_ENCRYPTED)
+          {
+              rgbText = SetTextColor(hdc, RGB(0, 192, 0));
           }
           else
           {
@@ -1954,6 +1961,7 @@ ExpandLevel(HWND hWnd, WPARAM wParam, INT nIndex, LPTSTR szPath)
 /////////////////////////////////////////////////////////////////////
 
 LRESULT
+CALLBACK
 TreeControlWndProc(
    register HWND hwnd,
    UINT uMsg,
@@ -2088,7 +2096,7 @@ TreeControlWndProc(
       //
       // set the selection in the tree to that for a given path
       //
-      INT i;
+      DWORD i;
 
       if (FindItemFromPath(hwndLB, (LPTSTR)lParam, wParam != 0, &i, NULL))
 	  {
@@ -2118,7 +2126,7 @@ TreeControlWndProc(
 		   break;
 
 	   RECT rc;
-	   INT i;
+	   DWORD i;
 	   PDNODE    pNode;
 
 	   // do the same as TC_SETDIRECTORY above for the simple case
@@ -2194,7 +2202,7 @@ TreeControlWndProc(
       WCHAR    ch;
       PDNODE    pNode;
       WCHAR rgchMatch[MAXPATHLEN];
-      INT cchMatch;
+      SIZE_T cchMatch;
 
       //
       // backslash means the root
@@ -2298,7 +2306,7 @@ TreeControlWndProc(
 
 	  /* Did we find it? */
 	  if (!FindItemFromPath(hwndLB, (LPTSTR)lParam,
-		  wParam == FSC_MKDIR || wParam == FSC_MKDIRQUIET, &nIndex, &pNode)) {
+		  wParam == FSC_MKDIR || wParam == FSC_MKDIRQUIET, (DWORD*)&nIndex, &pNode)) {
          break;
 	  }
 
@@ -3241,4 +3249,3 @@ ResetTreeMax(
     SendMessage(hwndLB, LB_SETHORIZONTALEXTENT, xTreeMax, 0L);
 }
 
-

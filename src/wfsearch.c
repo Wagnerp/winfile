@@ -102,7 +102,7 @@ INT  SearchList(
    INT iFileCount,
    BOOL bRoot);
 VOID ClearSearchLB(BOOL bWorkerCall);
-INT SearchDrive();
+DWORD WINAPI SearchDrive(LPVOID lpParameter);
 
 #define SEARCH_FILE_WIDTH_DEFAULT 50
 
@@ -460,8 +460,12 @@ INT
 FillSearchLB(HWND hwndLB, LPWSTR szSearchFileSpec, BOOL bRecurse, BOOL bIncludeSubdirs)
 {
    INT iRet;
+   INT iFileCount;
    WCHAR szFileSpec[MAXPATHLEN+1];
    WCHAR szPathName[MAXPATHLEN+1];
+   WCHAR szWildCard[20];
+   LPWCH lpszCurrentFileSpecStart;
+   LPWCH lpszCurrentFileSpecEnd;
    LPXDTALINK lpStart = NULL;
 
    //
@@ -473,21 +477,48 @@ FillSearchLB(HWND hwndLB, LPWSTR szSearchFileSpec, BOOL bRecurse, BOOL bIncludeS
    StripPath(szFileSpec);
    StripFilespec(szPathName);
 
-   FixUpFileSpec(szFileSpec);
+   lpszCurrentFileSpecEnd = szFileSpec;
 
    maxExt = 0;
 
    iDirsRead = 1;
    dwLastUpdateTime = 0;
+   iRet = 0;
+   iFileCount = 0;
 
-   iRet = SearchList(hwndLB,
-                     szPathName,
-                     szFileSpec,
-                     bRecurse,
-	                 bIncludeSubdirs,
-                     &lpStart,
-                     0,
-                     TRUE);
+   //
+   // This loop runs for each subspec in the search string
+   //
+   while (*lpszCurrentFileSpecEnd) {
+	  lpszCurrentFileSpecStart = lpszCurrentFileSpecEnd;
+
+	  // Find the next separator or the end of the string
+	  while ((*lpszCurrentFileSpecEnd) && (*lpszCurrentFileSpecEnd) != ';')
+		 lpszCurrentFileSpecEnd++;
+
+	  // If a separator is reached, add the string terminator and move the
+	  // end after the terminator for the next cycle
+	  if (*lpszCurrentFileSpecEnd == ';') {
+		  *lpszCurrentFileSpecEnd = TEXT('\0');
+		  lpszCurrentFileSpecEnd++;
+	  }
+
+      // copy the wild card to a temporary buffer sine FixUpFileSpec modifies the buffer
+      wcsncpy_s(szWildCard, COUNTOF(szWildCard), lpszCurrentFileSpecStart, _TRUNCATE);
+
+	  FixUpFileSpec(szWildCard);
+
+	  iRet = SearchList(hwndLB,
+		  szPathName,
+		  szWildCard,
+		  bRecurse,
+		  bIncludeSubdirs,
+		  &lpStart,
+		  iFileCount,
+		  TRUE);
+
+      iFileCount = iRet;
+   }
 
    //
    // Only SetSel if none set already
@@ -559,6 +590,7 @@ UpdateSearchStatus(HWND hwndLB, INT nCount)
 
 
 LRESULT
+CALLBACK
 SearchWndProc(
    register HWND hwnd,
    UINT uMsg,
@@ -793,7 +825,7 @@ SearchWndProc(
          SearchInfo.bCancel = FALSE;
 
          // Create our dialog!  (modeless)
-         CreateDialog(hAppInstance, (LPWSTR) MAKEINTRESOURCE(SEARCHPROGDLG), hwndFrame, (DLGPROC) SearchProgDlgProc);
+         CreateDialog(hAppInstance, (LPWSTR) MAKEINTRESOURCE(SEARCHPROGDLG), hwndFrame, SearchProgDlgProc);
 
       }  // ELSE from wParam == CD_VIEW
 
@@ -892,7 +924,7 @@ SearchWndProc(
       //
       // Create our dialog!  (modeless)
       //
-      CreateDialog(hAppInstance, (LPWSTR) MAKEINTRESOURCE(SEARCHPROGDLG), hwndFrame, (DLGPROC) SearchProgDlgProc);
+      CreateDialog(hAppInstance, (LPWSTR) MAKEINTRESOURCE(SEARCHPROGDLG), hwndFrame, SearchProgDlgProc);
 
       break;
    }
@@ -1115,7 +1147,7 @@ UnlockSearchFile()
 }
 
 
-LRESULT CALLBACK
+INT_PTR CALLBACK
 SearchProgDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
    DWORD dwIgnore;
@@ -1201,7 +1233,7 @@ SearchProgDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
       if (!SearchInfo.hThread) {
          SearchInfo.hThread = CreateThread( NULL,        // Security
             0L,                                          // Stack Size
-            (LPTHREAD_START_ROUTINE)SearchDrive,
+            SearchDrive,
             NULL,
             0L,
             &dwIgnore );
@@ -1321,8 +1353,9 @@ CloseWindow:
    }
 }
 
-INT
-SearchDrive()
+DWORD
+WINAPI
+SearchDrive(LPVOID lpParameter)
 {
    maxExtLast = SEARCH_FILE_WIDTH_DEFAULT;
 
@@ -1400,4 +1433,3 @@ ClearSearchLB(BOOL bWorkerCall)
    }
 }
 
-
